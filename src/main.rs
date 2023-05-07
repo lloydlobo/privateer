@@ -1,15 +1,10 @@
 //! To get your repositories on Git in Rust CLI, you can use the Git command-line interface (CLI) tool called `git`. Here are the steps to follow:
 //!
 //! 1. Open your terminal or command prompt and navigate to the directory where you want to clone the repository.
-//!
 //! 2. Clone the repository by running the command `git clone <repository URL>` where the repository URL is the URL of the repository you want to clone.
-//!
 //! 3. Once the repository is cloned, navigate to the cloned repository directory by running the command `cd <repository name>`.
-//!
 //! 4. To edit the privacy settings of your repository, you can use the Git API or the web interface provided by your Git hosting provider (such as GitHub, GitLab, or Bitbucket). Here's an example of how to make a repository private using the GitHub API:
-//!
 //!    - First, you'll need to generate a personal access token (PAT) on GitHub by going to your account settings and selecting "Developer settings" > "Personal access tokens" > "Generate new token". Make sure to give the token the necessary permissions to modify repositories.
-//!
 //!    - Next, run the following command to make the repository private:
 //!
 //!      ```
@@ -17,20 +12,19 @@
 //!      ```
 //!
 //!      Replace `<your PAT>` with your personal access token, `<your username>` with your GitHub username, and `<your repository name>` with the name of your repository.
-//!
 //!    - If you want to make multiple repositories private or public, you can create a script that loops through a list of repositories and makes the necessary changes using the Git API or the web interface provided by your Git hosting provider.
-//!
 //!    - Alternatively, you can use a third-party tool like the GitHub CLI (`gh`) to manage your repositories from the command line. `gh` provides an easy-to-use interface for managing repositories, including creating, cloning, and modifying them.
 
 use anyhow::anyhow;
-
 use serde::Deserialize;
 
 pub(crate) type Result<T> = anyhow::Result<T, anyhow::Error>;
+
 // Unicode symbols for success and error messages.
 pub(crate) static SUCCESS_ICON: &str = "\u{2705}"; // ✅ green_check_unicode.
 pub(crate) static ERROR_ICON: &str = "\u{274C}"; // ❌ red_x_unicode.
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub(crate) struct ApiResponse {
     message: String,
@@ -39,23 +33,20 @@ pub(crate) struct ApiResponse {
 
 /// This function makes a PATCH request to the GitHub API to update the privacy settings of a repository.
 ///
-/// To make a public repository private using a personal access token (PAT) on GitHub, you need to have the `repo` scope in your PAT. The `repo` scope allows the PAT to access and modify the repository, including changing its privacy settings.
+/// To make a public repository private using a personal access token (PAT) on GitHub, you need to have the `repo` scope in your PAT.
+/// The `repo` scope allows the PAT to access and modify the repository, including changing its privacy settings.
 ///
 /// Here are the steps to generate a PAT with the required scope:
 ///
 /// 1. Go to your GitHub account settings and select "Developer settings" > "Personal access tokens" > "Generate new token".
-///
 /// 2. Give the token a name and select the `repo` scope.
-///
 /// 3. Click on "Generate token" to create the PAT.
 ///
 /// Once you have generated the PAT, you can use it to make a public repository private by sending a
 /// PATCH request to the GitHub API with the following payload:
 ///
 /// ```
-/// {
-///   "private": true
-/// }
+/// { "private": true }
 /// ```
 ///
 /// Make sure to include your PAT in the `Authorization` header of the request using the following format:
@@ -67,7 +58,6 @@ pub(crate) struct ApiResponse {
 /// Replace `<your PAT>` with your actual PAT value.
 ///
 /// See also: [update-a-repository] https://docs.github.com/en/rest/repos/repos?apiVersion=2022-11-28#update-a-repository
-///
 #[tokio::main]
 async fn main() -> Result<()> {
     // Load environment vairables from .env file.
@@ -113,7 +103,7 @@ async fn main() -> Result<()> {
         }
     };
 
-    github::post_request(repository, privacy, api_url, Some(pat_token)).await?;
+    github::post_request(repository, privacy, api_url, pat_token).await?;
 
     Ok(())
 }
@@ -152,6 +142,7 @@ mod prompter {
         Ok(input.trim().to_string())
     }
 
+    #[allow(dead_code)]
     pub(crate) fn prompt_for_privacy() -> Result<bool> {
         // Prompt the user to enter the privacy setting for the repository.
         println!("Should the repository be private? [y/n]");
@@ -172,10 +163,9 @@ mod prompter {
 
 pub(crate) mod github {
     use super::{Result, ERROR_ICON, SUCCESS_ICON};
-    use crate::prompter::prompt_for_token;
+    use anyhow::anyhow;
     use reqwest::header::HeaderValue;
     use serde_json::{json, Value};
-    // use reqwest::header::HeaderMap;
 
     /// Command to make the repository private:
     ///
@@ -183,27 +173,17 @@ pub(crate) mod github {
     /// curl -H "Authorization: token <your PAT>" -X PATCH https://api.github.com/repos/<your username>/<your repository name> -d '{"private": true}'
     /// ```
     /// # Reference
+    ///
     /// ```shell
-    /// curl -L \
-    /// -X PATCH \
-    /// -H "Accept: application/vnd.github+json" \
-    /// -H "Authorization: Bearer <YOUR-TOKEN>" \
-    /// -H "X-GitHub-Api-Version: 2022-11-28" \
-    /// https://api.github.com/repos/OWNER/REPO \
-    /// -d '{"name":"Hello-World","description":"This is your first repository","homepage":"https://github.com","private":true,"has_issues":true,"has_projects":true,"has_wiki":true}'
+    /// curl -L \ -X PATCH \ -H "Accept: application/vnd.github+json" \ -H "Authorization: Bearer <YOUR-TOKEN>" \ -H "X-GitHub-Api-Version: 2022-11-28" \ https://api.github.com/repos/OWNER/REPO \ -d '{"name":"Hello-World","description":"This is your first repository","homepage":"https://github.com","private":true,"has_issues":true,"has_projects":true,"has_wiki":true}'
     /// ```
     pub(crate) async fn post_request(
         repository: String,
         privacy: String,
         api_url: String,
-        pat_token: Option<String>,
+        pat_token: String,
     ) -> Result<()> {
-        let token = pat_token
-            .as_deref()
-            .map(|token| HeaderValue::from_str(&prefix_token(token)))
-            .unwrap_or_else(|| {
-                HeaderValue::from_str(&prefix_token(prompt_for_token().unwrap().as_str()))
-            })?;
+        let token = HeaderValue::from_str(&format!("token {}", pat_token))?;
 
         // Construct the request body.
         let body: Value = json!({
@@ -224,23 +204,20 @@ pub(crate) mod github {
             .await?;
 
         // Check if the request was successful.
-        if response.status().is_success() {
-            println!("{SUCCESS_ICON} Repository privacy setting updated successfully!");
-        } else {
-            println!(
-                "{ERROR_ICON} Failed to update repository privacy setting: {:?}",
-                response.text().await?
-            );
+        if !response.status().is_success() {
+            return Err(anyhow!(
+                "{ERROR_ICON} Failed to update repository privacy setting: {err:?}",
+                err = response.text().await?
+            ));
         }
+
+        println!("{SUCCESS_ICON} Repository privacy setting updated successfully!");
 
         Ok(())
     }
-
-    fn prefix_token(token: &str) -> String {
-        format!("token {}", token)
-    }
 }
 
+#[allow(dead_code)]
 pub(crate) mod shell {
     use super::{Result, ERROR_ICON, SUCCESS_ICON};
     use crate::ApiResponse;
@@ -288,3 +265,13 @@ pub(crate) mod shell {
         Ok(())
     }
 }
+// // Validate the privacy and api.
+// match privacy.trim().to_lowercase().as_ref() {
+//     "true" | "false" => (),
+//     _ => return Err(anyhow!("Invalid `privacy`:, enter `true` or `false`")),
+// };
+// let api_url_template =
+//     "https://api.github.com/repos/<your username>/<your repository name>";
+// if !api_url.contains( api_url_template .split("<") .collect::<Vec<_>>() .first() .unwrap()) {
+//     return Err(anyhow!( "Internal error: `api_url` must be similar to `{help}`", help = api_url_template));
+// }
