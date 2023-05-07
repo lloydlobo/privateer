@@ -29,6 +29,9 @@ use std::io::{BufRead, Write};
 use std::process::Command;
 
 pub(crate) type Result<T> = anyhow::Result<T, anyhow::Error>;
+// Unicode symbols for success and error messages.
+pub(crate) static SUCCESS_ICON: &str = "\u{2705}"; // ✅ green_check_unicode.
+pub(crate) static ERROR_ICON: &str = "\u{274C}"; // ❌ red_x_unicode.
 
 #[derive(Debug, Deserialize)]
 struct ApiResponse {
@@ -67,32 +70,33 @@ struct ApiResponse {
 ///
 /// See also: [update-a-repository] https://docs.github.com/en/rest/repos/repos?apiVersion=2022-11-28#update-a-repository
 ///
-// let command = r#"curl -L \
-// -X PATCH \
-// -H "Accept: application/vnd.github+json" \
-// -H "Authorization: Bearer <YOUR-TOKEN>" \
-// -H "X-GitHub-Api-Version: 2022-11-28" \
-// https://api.github.com/repos/OWNER/REPO \
-// -d '{"name":"Hello-World","description":"This is your first repository","homepage":"https://github.com","private":true,"has_issues":true,"has_projects":true,"has_wiki":true}'"#;
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     // Load environment vairables from .env file.
     dotenv::dotenv().ok();
 
-    // Unicode symbols for success and error messages.
-    let green_check_unicode = "\u{2705}"; // ✅
-    let red_x_unicode = "\u{274C}"; // ❌
-
     // Prompt the user to enter the username and repository name.
-    let username = prompt_user_input("Enter username: ")?;
-    let repository = prompt_user_input("Enter repository: ")?;
+    let username = shell_prompt::prompt_user_input("Enter username: ")?;
+    if username.is_empty() {
+        return Err(anyhow!("{ERROR_ICON} `username` is required",));
+    }
+    let repository = shell_prompt::prompt_user_input("Enter repository: ")?;
+    if repository.is_empty() {
+        return Err(anyhow!("{ERROR_ICON} `password` is required",));
+    }
 
     // Get personal access token.
     let pat_token = std::env::var("PAT_TOKEN")
         .map(|token| match token.is_empty() {
-            true => prompt_for_token().unwrap(),
+            true => shell_prompt::prompt_for_token().unwrap(),
             false => token,
         })
-        .unwrap_or_else(|_| prompt_for_token().unwrap());
+        .unwrap_or_else(|_| shell_prompt::prompt_for_token().unwrap());
+    if pat_token.is_empty() {
+        return Err(anyhow!(
+            "{ERROR_ICON} `PAT (Personal Access Token)` is required",
+        ));
+    }
 
     // Construct the Authorization header and API URL.
     let auth_header = format!("Authorization: token {token}", token = pat_token,);
@@ -103,128 +107,156 @@ fn main() -> Result<()> {
     );
 
     // Prompt the user to enter the privacy setting for the repository.
-    let is_private = 'l: loop {
-        let input = prompt_user_input("Make it private?: (true/false) ")
+    let privacy = 'l: loop {
+        let input = shell_prompt::prompt_user_input("Make it private?: (true/false) ")
             .unwrap_or_else(|_| "false".to_owned());
         match input == "true" || input == "false" {
             true => break 'l input,
-            false => println!("{red_x_unicode} Please enter either `true` or `false`"),
+            false => println!("{ERROR_ICON} Please enter either `true` or `false`"),
         }
     };
-    let options = format!("{{\"private\": {is_private}}}", is_private = is_private);
+    let options = format!("{{\"private\": {is_private}}}", is_private = privacy);
 
-    let cmd = Command::new("curl")
-        .args(["-H", &auth_header, "-X", "PATCH", &api_url, "-d", &options])
-        .output() // .spawn()
-        .with_context(|| "curl command failed to start")?;
+    // {
+    //     let cmd = Command::new("curl")
+    //         .args(["-H", &auth_header, "-X", "PATCH", &api_url, "-d", &options])
+    //         .output() // .spawn()
+    //         .with_context(|| "curl command failed to start")?;
+    //
+    //     // The API call was successful, and the response can be accessed here.
+    //     let s = &String::from_utf8_lossy(&cmd.stdout);
+    //     if let Ok(response) = serde_json::from_str::<ApiResponse>(s) {
+    //         if response.message == "Not Found" {
+    //             return Err(anyhow!( "{ERROR_ICON} Failed to execute `curl` command: `{err:?}`", err = response,));
+    //         }
+    //     }
+    //     if !cmd.status.success() {
+    //         return Err(anyhow!( "{ERROR_ICON} Failed to execute `curl` command: `{stderr:?}`", stderr = cmd.stderr,));
+    //     }
+    //     println!("{success_icon} curl: {cmd}", cmd = cmd.status);
+    // }
 
-    // The API call was successful, and the response can be accessed here.
-    if let Ok(response) = serde_json::from_str::<ApiResponse>(&String::from_utf8_lossy(&cmd.stdout))
     {
-        if response.message == "Not Found" {
-            return Err(anyhow!(
-                "{red_x_unicode} Failed to execute `curl` command: `{err:?}`",
-                err = response,
-            ));
-        }
+        github::post_request(repository, privacy, api_url, Some(pat_token)).await?;
     }
-
-    if !cmd.status.success() {
-        return Err(anyhow!(
-            "{red_x_unicode} Failed to execute `curl` command: `{stderr:?}`",
-            stderr = cmd.stderr,
-        ));
-    }
-
-    println!("{green_check_unicode} curl: {cmd}", cmd = cmd.status);
 
     Ok(())
 }
 
-/// Function `prompt_for_token` prompts the user to enter a GitHub API token and returns it.
-///
-/// # Panics
-///
-/// This function panics if it is unable to prompt for the token in a secure manner.
-fn prompt_for_token() -> Result<String> {
-    let token = rpassword::prompt_password("Enter token: ")
-        .with_context(|| "Failed to prompt for token securely")?;
+mod shell_prompt {
+    use super::Result;
+    use anyhow::{anyhow, Context};
+    use std::io::{BufRead, Write};
 
-    Ok(token)
-}
+    /// Function `prompt_for_token` prompts the user to enter a GitHub API token and returns it.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if it is unable to prompt for the token in a secure manner.
+    pub(crate) fn prompt_for_token() -> Result<String> {
+        let token = rpassword::prompt_password("Enter token: ")
+            .with_context(|| "Failed to prompt for token securely")?;
 
-/// Function `prompt_user_input` prompts the user to enter a value and returns it.
-///
-/// # Arguments
-///
-/// * `message` - A message to display to the user when prompting for input.
-///
-/// # Panics
-///
-/// This function panics if it is unable to prompt for input in a secure manner.
-fn prompt_user_input(message: &str) -> Result<String> {
-    print!("{}", message);
-    std::io::stdout().flush()?;
-    let mut input = String::new();
-    std::io::stdin().lock().read_line(&mut input)?;
-    Ok(input.trim().to_string())
-}
+        Ok(token)
+    }
 
-fn prompt_for_privacy() -> Result<bool> {
-    // Prompt the user to enter the privacy setting for the repository.
-    println!("Should the repository be private? [y/n]");
-    let mut input = String::new();
-    std::io::stdin()
-        .read_line(&mut input)
-        .map_err(|_| "Failed to read input".to_owned())
-        .unwrap();
+    /// Function `prompt_user_input` prompts the user to enter a value and returns it.
+    ///
+    /// # Arguments
+    ///
+    /// * `message` - A message to display to the user when prompting for input.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if it is unable to prompt for input in a secure manner.
+    pub(crate) fn prompt_user_input(message: &str) -> Result<String> {
+        print!("{}", message);
+        std::io::stdout().flush()?;
+        let mut input = String::new();
+        std::io::stdin().lock().read_line(&mut input)?;
+        Ok(input.trim().to_string())
+    }
 
-    // Parse the input as a boolean value.
-    match input.trim().to_lowercase().as_ref() {
-        "y" | "yes" => Ok(true),
-        "n" | "no" => Ok(false),
-        _ => Err(anyhow!("Invalid input, please enter y or n".to_owned())),
+    pub(crate) fn prompt_for_privacy() -> Result<bool> {
+        // Prompt the user to enter the privacy setting for the repository.
+        println!("Should the repository be private? [y/n]");
+        let mut input = String::new();
+        std::io::stdin()
+            .read_line(&mut input)
+            .map_err(|_| "Failed to read input".to_owned())
+            .unwrap();
+
+        // Parse the input as a boolean value.
+        match input.trim().to_lowercase().as_ref() {
+            "y" | "yes" => Ok(true),
+            "n" | "no" => Ok(false),
+            _ => Err(anyhow!("Invalid input, please enter y or n".to_owned())),
+        }
     }
 }
 
 pub(crate) mod github {
-    use super::Result;
+    use super::{Result, ERROR_ICON, SUCCESS_ICON};
+    use crate::shell_prompt::prompt_for_token;
+    use reqwest::header::HeaderValue;
     use serde_json::{json, Value};
     // use reqwest::header::HeaderMap;
 
+    /// # Reference
+    /// ```shell
+    /// curl -L \
+    /// -X PATCH \
+    /// -H "Accept: application/vnd.github+json" \
+    /// -H "Authorization: Bearer <YOUR-TOKEN>" \
+    /// -H "X-GitHub-Api-Version: 2022-11-28" \
+    /// https://api.github.com/repos/OWNER/REPO \
+    /// -d '{"name":"Hello-World","description":"This is your first repository","homepage":"https://github.com","private":true,"has_issues":true,"has_projects":true,"has_wiki":true}'
+    /// ```
     pub(crate) async fn post_request(
         repository: String,
-        description: String,
         privacy: String,
         api_url: String,
-        auth_header: String,
+        pat_token: Option<String>,
     ) -> Result<()> {
+        let token = pat_token
+            .as_deref()
+            .map(|token| HeaderValue::from_str(&prefix_token(token)))
+            .unwrap_or_else(|| {
+                HeaderValue::from_str(&prefix_token(prompt_for_token().unwrap().as_str()))
+            })?;
+
         // Construct the request body.
         let body: Value = json!({
             "name": repository,
-            "description": description,
-            "private": privacy,
+            "private": privacy, // 'true' || 'false'
             "auto_init": true,
         });
 
         // Send the API request.
         let client = reqwest::Client::new();
         let response = client
-            .post(&api_url)
-            .header("Accept", "application/vnd.github.v3+json")
-            .header("User-Agent", "github-create-repo-rs")
-            .header("Authorization", auth_header)
-            .body(body.to_string()) // Serialize the body to a JSON string
+            .post(&api_url) // .patch(&api_url)
+            .header(reqwest::header::ACCEPT, "application/vnd.github.v3+json")
+            .header(reqwest::header::USER_AGENT, env!("CARGO_PKG_NAME"))
+            .header(reqwest::header::AUTHORIZATION, token)
+            .body(body.to_string()) // Serialize the body to a JSON string.
             .send()
             .await?;
 
         // Check if the request was successful.
         if response.status().is_success() {
-            println!("Repository successfully created!");
+            println!("{SUCCESS_ICON} Repository privacy setting updated successfully!");
         } else {
-            println!("Failed to create repository: {:?}", response.text().await?);
+            println!(
+                "{ERROR_ICON} Failed to update repository privacy setting: {:?}",
+                response.text().await?
+            );
         }
 
         Ok(())
+    }
+
+    fn prefix_token(token: &str) -> String {
+        format!("token {}", token)
     }
 }
