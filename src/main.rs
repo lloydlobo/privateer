@@ -22,11 +22,11 @@
 //!
 //!    - Alternatively, you can use a third-party tool like the GitHub CLI (`gh`) to manage your repositories from the command line. `gh` provides an easy-to-use interface for managing repositories, including creating, cloning, and modifying them.
 
-use anyhow::{anyhow, Context};
+use anyhow::{anyhow};
 
 use serde::Deserialize;
-use std::io::{BufRead, Write};
-use std::process::Command;
+
+
 
 pub(crate) type Result<T> = anyhow::Result<T, anyhow::Error>;
 // Unicode symbols for success and error messages.
@@ -99,7 +99,7 @@ async fn main() -> Result<()> {
     }
 
     // Construct the Authorization header and API URL.
-    let auth_header = format!("Authorization: token {token}", token = pat_token,);
+    let _auth_header = format!("Authorization: token {token}", token = pat_token,);
     let api_url = format!(
         r#"https://api.github.com/repos/{username}/{repository}"#,
         username = username,
@@ -115,7 +115,7 @@ async fn main() -> Result<()> {
             false => println!("{ERROR_ICON} Please enter either `true` or `false`"),
         }
     };
-    let options = format!("{{\"private\": {is_private}}}", is_private = privacy);
+    let _options = format!("{{\"private\": {is_private}}}", is_private = privacy);
 
     // {
     //     let cmd = Command::new("curl")
