@@ -68,10 +68,8 @@ async fn main() -> Result<()> {
     if username.is_empty() {
         return Err(anyhow!("{ERROR_ICON} `username` is required",));
     }
-    let repository = prompter::prompt_user_input("Enter repository: ")?;
-    if repository.is_empty() {
-        return Err(anyhow!("{ERROR_ICON} `password` is required",));
-    }
+
+    github::get_repo_list(&username).await?;
 
     // Get personal access token.
     let pat_token = std::env::var("PAT_TOKEN")
@@ -84,6 +82,11 @@ async fn main() -> Result<()> {
         return Err(anyhow!(
             "{ERROR_ICON} `PAT (Personal Access Token)` is required",
         ));
+    }
+
+    let repository = prompter::prompt_user_input("Enter repository: ")?;
+    if repository.is_empty() {
+        return Err(anyhow!("{ERROR_ICON} `password` is required",));
     }
 
     // Construct the Authorization header and API URL.
@@ -162,10 +165,65 @@ mod prompter {
 }
 
 pub(crate) mod github {
+    use std::sync::Arc;
+
     use super::{Result, ERROR_ICON, SUCCESS_ICON};
     use anyhow::anyhow;
     use reqwest::header::HeaderValue;
+    use serde::Deserialize;
     use serde_json::{json, Value};
+
+    #[derive(Debug, Deserialize)]
+    pub(crate) struct Repo {
+        name: String,
+        url: String,
+        #[serde(rename = "isPrivate", skip_serializing_if = "Option::is_none")]
+        is_private: Option<bool>,
+    }
+
+    pub(crate) async fn get_repo_list(username: &str) -> Result<Vec<String>> {
+        let mut page_number = 1;
+
+        let mut repo_list = Vec::new();
+        'l: loop {
+            if page_number >= 4 {
+                break 'l;
+            } // 400 items. 100 is max limit per page.
+
+            let url = format!(
+                "https://api.github.com/users/{username}/repos?page={page}&per_page=100",
+                username = username,
+                page = page_number,
+            );
+            let client = reqwest::Client::new();
+            let response = client
+                .get(&url)
+                .header(reqwest::header::USER_AGENT, env!("CARGO_PKG_NAME"))
+                .send()
+                .await?; // if response.content_length().unwrap() == 0 { break; }
+
+            // let err = response.error_for_status()?;
+            // Check if the request was successful.
+            // if !err.status().is_success() {
+            //     return Err(anyhow!( "{ERROR_ICON} Failed to get repository list: {err:?}", err = &err.text().await?));
+            // }
+
+            let repos: Vec<Repo> = serde_json::from_str(&response.text().await?)?;
+
+            for repo in repos {
+                repo_list.push(repo.name);
+            }
+            page_number += 1;
+        }
+
+        println!(
+            "{SUCCESS_ICON} Fetched details of `{count}` repos successfully!",
+            count = repo_list.len()
+        );
+
+        Ok(repo_list)
+        // Ok(vec![String::new()])
+    }
 
     /// Command to make the repository private:
     ///
