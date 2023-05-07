@@ -24,10 +24,17 @@
 
 use anyhow::{anyhow, Context};
 
+use serde::Deserialize;
 use std::io::{BufRead, Write};
 use std::process::Command;
 
 type Result<T> = anyhow::Result<T, anyhow::Error>;
+
+#[derive(Debug, Deserialize)]
+struct ApiResponse {
+    message: String,
+    documentation_url: String,
+}
 
 /// To make a public repository private using a personal access token (PAT) on GitHub, you need to have the `repo` scope in your PAT. The `repo` scope allows the PAT to access and modify the repository, including changing its privacy settings.
 ///
@@ -68,19 +75,13 @@ type Result<T> = anyhow::Result<T, anyhow::Error>;
 fn main() -> Result<()> {
     // Load environment vairables from .env file.
     dotenv::dotenv().ok();
+    let green_check_unicode = "\u{2705}"; // ✅
+    let red_x_unicode = "\u{274C}"; // ❌
 
-    let mut username = String::new();
-    print!("Enter username: ");
-    std::io::stdout().flush()?;
-    std::io::stdin().read_line(&mut username)?;
-    username = username.trim().to_string();
+    let username = prompt_user_input("Enter username: ")?;
+    let repository = prompt_user_input("Enter repository: ")?;
 
-    let mut repository = String::new();
-    print!("Enter repository: ");
-    std::io::stdout().flush()?;
-    std::io::stdin().read_line(&mut repository)?;
-    repository = repository.trim().to_string();
-
+    // Get personal access token.
     let pat_token = std::env::var("PAT_TOKEN")
         .map(|token| match token.is_empty() {
             true => prompt_for_token().unwrap(),
@@ -94,35 +95,73 @@ fn main() -> Result<()> {
         username = username,
         repository = repository,
     );
-    let options = r#"{"private": true}"#;
+    let is_private = 'l: loop {
+        let input = prompt_user_input("Make it private?: (true/false) ")
+            .unwrap_or_else(|_| "false".to_owned());
+        match input == "true" || input == "false" {
+            true => break 'l input,
+            false => println!("{red_x_unicode} Please enter either `true` or `false`"),
+        }
+    };
+    let options = format!("{{\"private\": {is_private}}}", is_private = is_private);
+
     let cmd = Command::new("curl")
-        .args(["-H", &auth, "-X", "PATCH", &api_url, "-d", options])
+        .args(["-H", &auth, "-X", "PATCH", &api_url, "-d", &options])
         .output() // .spawn()
         .with_context(|| "curl command failed to start")?;
 
-    let green_check_unicode = "\u{2705}"; // ✅
-    if cmd.status.success() {
-        println!("{green_check_unicode} curl: {cmd}", cmd = cmd.status);
-    } else {
+    // The API call was successful, and the response can be accessed here.
+    if let Ok(response) = serde_json::from_str::<ApiResponse>(&String::from_utf8_lossy(&cmd.stdout))
+    {
+        if response.message == "Not Found" {
+            return Err(anyhow!(
+                "{red_x_unicode} Failed to execute `curl` command: `{err:?}`",
+                err = response,
+            ));
+        }
+    }
+
+    if !cmd.status.success() {
         return Err(anyhow!(
-            "Failed to execute `curl` command: `{stderr:?}`",
+            "{red_x_unicode} Failed to execute `curl` command: `{stderr:?}`",
             stderr = cmd.stderr,
         ));
     }
 
-    Ok(())
-} // let binding = cmd.stdout.to_vec(); let stdout = String::from_utf8_lossy(&binding); print!("{stdout}");
+    println!("{green_check_unicode} curl: {cmd}", cmd = cmd.status);
 
-/// .
+    Ok(())
+}
+
+/// Function `prompt_for_token` prompts the user to enter a GitHub API token and returns it.
 ///
 /// # Panics
 ///
-/// Panics if .
+/// This function panics if it is unable to prompt for the token in a secure manner.
 fn prompt_for_token() -> Result<String> {
     let token = rpassword::prompt_password("Enter token: ")
-        .with_context(|| "Should prompt token in a password like field")?;
+        .with_context(|| "Failed to prompt for token securely")?;
+
     Ok(token)
 }
+
+/// Function `prompt_user_input` prompts the user to enter a value and returns it.
+///
+/// # Arguments
+///
+/// * `message` - A message to display to the user when prompting for input.
+///
+/// # Panics
+///
+/// This function panics if it is unable to prompt for input in a secure manner.
+fn prompt_user_input(message: &str) -> Result<String> {
+    print!("{}", message);
+    std::io::stdout().flush()?;
+    let mut input = String::new();
+    std::io::stdin().lock().read_line(&mut input)?;
+    Ok(input.trim().to_string())
+}
+
 // Open an interactive shell like repl.
 // let cmd = Command::new("sh")
 //     .args(["echo", "hello"])
