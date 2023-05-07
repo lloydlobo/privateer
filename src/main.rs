@@ -22,11 +22,9 @@
 //!
 //!    - Alternatively, you can use a third-party tool like the GitHub CLI (`gh`) to manage your repositories from the command line. `gh` provides an easy-to-use interface for managing repositories, including creating, cloning, and modifying them.
 
-use anyhow::{anyhow};
+use anyhow::anyhow;
 
 use serde::Deserialize;
-
-
 
 pub(crate) type Result<T> = anyhow::Result<T, anyhow::Error>;
 // Unicode symbols for success and error messages.
@@ -34,7 +32,7 @@ pub(crate) static SUCCESS_ICON: &str = "\u{2705}"; // ✅ green_check_unicode.
 pub(crate) static ERROR_ICON: &str = "\u{274C}"; // ❌ red_x_unicode.
 
 #[derive(Debug, Deserialize)]
-struct ApiResponse {
+pub(crate) struct ApiResponse {
     message: String,
     documentation_url: String,
 }
@@ -76,11 +74,11 @@ async fn main() -> Result<()> {
     dotenv::dotenv().ok();
 
     // Prompt the user to enter the username and repository name.
-    let username = shell_prompt::prompt_user_input("Enter username: ")?;
+    let username = prompter::prompt_user_input("Enter username: ")?;
     if username.is_empty() {
         return Err(anyhow!("{ERROR_ICON} `username` is required",));
     }
-    let repository = shell_prompt::prompt_user_input("Enter repository: ")?;
+    let repository = prompter::prompt_user_input("Enter repository: ")?;
     if repository.is_empty() {
         return Err(anyhow!("{ERROR_ICON} `password` is required",));
     }
@@ -88,10 +86,10 @@ async fn main() -> Result<()> {
     // Get personal access token.
     let pat_token = std::env::var("PAT_TOKEN")
         .map(|token| match token.is_empty() {
-            true => shell_prompt::prompt_for_token().unwrap(),
+            true => prompter::prompt_for_token().unwrap(),
             false => token,
         })
-        .unwrap_or_else(|_| shell_prompt::prompt_for_token().unwrap());
+        .unwrap_or_else(|_| prompter::prompt_for_token().unwrap());
     if pat_token.is_empty() {
         return Err(anyhow!(
             "{ERROR_ICON} `PAT (Personal Access Token)` is required",
@@ -99,7 +97,6 @@ async fn main() -> Result<()> {
     }
 
     // Construct the Authorization header and API URL.
-    let _auth_header = format!("Authorization: token {token}", token = pat_token,);
     let api_url = format!(
         r#"https://api.github.com/repos/{username}/{repository}"#,
         username = username,
@@ -108,42 +105,20 @@ async fn main() -> Result<()> {
 
     // Prompt the user to enter the privacy setting for the repository.
     let privacy = 'l: loop {
-        let input = shell_prompt::prompt_user_input("Make it private?: (true/false) ")
+        let input = prompter::prompt_user_input("Make it private?: (true/false) ")
             .unwrap_or_else(|_| "false".to_owned());
         match input == "true" || input == "false" {
             true => break 'l input,
             false => println!("{ERROR_ICON} Please enter either `true` or `false`"),
         }
     };
-    let _options = format!("{{\"private\": {is_private}}}", is_private = privacy);
 
-    // {
-    //     let cmd = Command::new("curl")
-    //         .args(["-H", &auth_header, "-X", "PATCH", &api_url, "-d", &options])
-    //         .output() // .spawn()
-    //         .with_context(|| "curl command failed to start")?;
-    //
-    //     // The API call was successful, and the response can be accessed here.
-    //     let s = &String::from_utf8_lossy(&cmd.stdout);
-    //     if let Ok(response) = serde_json::from_str::<ApiResponse>(s) {
-    //         if response.message == "Not Found" {
-    //             return Err(anyhow!( "{ERROR_ICON} Failed to execute `curl` command: `{err:?}`", err = response,));
-    //         }
-    //     }
-    //     if !cmd.status.success() {
-    //         return Err(anyhow!( "{ERROR_ICON} Failed to execute `curl` command: `{stderr:?}`", stderr = cmd.stderr,));
-    //     }
-    //     println!("{success_icon} curl: {cmd}", cmd = cmd.status);
-    // }
-
-    {
-        github::post_request(repository, privacy, api_url, Some(pat_token)).await?;
-    }
+    github::post_request(repository, privacy, api_url, Some(pat_token)).await?;
 
     Ok(())
 }
 
-mod shell_prompt {
+mod prompter {
     use super::Result;
     use anyhow::{anyhow, Context};
     use std::io::{BufRead, Write};
@@ -197,11 +172,16 @@ mod shell_prompt {
 
 pub(crate) mod github {
     use super::{Result, ERROR_ICON, SUCCESS_ICON};
-    use crate::shell_prompt::prompt_for_token;
+    use crate::prompter::prompt_for_token;
     use reqwest::header::HeaderValue;
     use serde_json::{json, Value};
     // use reqwest::header::HeaderMap;
 
+    /// Command to make the repository private:
+    ///
+    /// ```
+    /// curl -H "Authorization: token <your PAT>" -X PATCH https://api.github.com/repos/<your username>/<your repository name> -d '{"private": true}'
+    /// ```
     /// # Reference
     /// ```shell
     /// curl -L \
@@ -258,5 +238,53 @@ pub(crate) mod github {
 
     fn prefix_token(token: &str) -> String {
         format!("token {}", token)
+    }
+}
+
+pub(crate) mod shell {
+    use super::{Result, ERROR_ICON, SUCCESS_ICON};
+    use crate::ApiResponse;
+    use anyhow::{anyhow, Context};
+
+    /// Command to make the repository private:
+    ///
+    /// ```
+    /// curl -H "Authorization: token <your PAT>" -X PATCH https://api.github.com/repos/<your username>/<your repository name> -d '{"private": true}'
+    /// ```
+    fn post_request_curl(
+        _repository: String,
+        privacy: String,
+        api_url: String,
+        pat_token: Option<String>,
+    ) -> Result<()> {
+        let options = format!(r#"{{"private": {is_private}}}"#, is_private = privacy);
+        let auth_header = format!("Authorization: token {token}", token = pat_token.unwrap(),);
+
+        let cmd = std::process::Command::new("curl")
+            .args(["-H", &auth_header, "-X", "PATCH", &api_url, "-d", &options])
+            .output() // .spawn()
+            .with_context(|| "curl command failed to start")?;
+
+        // The API call was successful, and the response can be accessed here.
+        let stdout = String::from_utf8_lossy(&cmd.stdout);
+        match serde_json::from_str::<ApiResponse>(&stdout) {
+            Ok(response) if response.message == "Not Found" => {
+                return Err(anyhow!(
+                    "{ERROR_ICON} Failed to execute `curl` command: `{response:?}`",
+                    response = response,
+                ));
+            }
+            _ => (),
+        }
+
+        if !cmd.status.success() {
+            return Err(anyhow!(
+                "{ERROR_ICON} Failed to execute `curl` command: `{stderr:?}`",
+                stderr = cmd.stderr,
+            ));
+        }
+        println!("{SUCCESS_ICON} curl: {cmd}", cmd = cmd.status);
+
+        Ok(())
     }
 }
