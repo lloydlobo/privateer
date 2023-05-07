@@ -28,7 +28,7 @@ use serde::Deserialize;
 use std::io::{BufRead, Write};
 use std::process::Command;
 
-type Result<T> = anyhow::Result<T, anyhow::Error>;
+pub(crate) type Result<T> = anyhow::Result<T, anyhow::Error>;
 
 #[derive(Debug, Deserialize)]
 struct ApiResponse {
@@ -36,6 +36,8 @@ struct ApiResponse {
     documentation_url: String,
 }
 
+/// This function makes a PATCH request to the GitHub API to update the privacy settings of a repository.
+///
 /// To make a public repository private using a personal access token (PAT) on GitHub, you need to have the `repo` scope in your PAT. The `repo` scope allows the PAT to access and modify the repository, including changing its privacy settings.
 ///
 /// Here are the steps to generate a PAT with the required scope:
@@ -75,9 +77,12 @@ struct ApiResponse {
 fn main() -> Result<()> {
     // Load environment vairables from .env file.
     dotenv::dotenv().ok();
+
+    // Unicode symbols for success and error messages.
     let green_check_unicode = "\u{2705}"; // ✅
     let red_x_unicode = "\u{274C}"; // ❌
 
+    // Prompt the user to enter the username and repository name.
     let username = prompt_user_input("Enter username: ")?;
     let repository = prompt_user_input("Enter repository: ")?;
 
@@ -89,12 +94,15 @@ fn main() -> Result<()> {
         })
         .unwrap_or_else(|_| prompt_for_token().unwrap());
 
-    let auth = format!("Authorization: token {token}", token = pat_token,);
+    // Construct the Authorization header and API URL.
+    let auth_header = format!("Authorization: token {token}", token = pat_token,);
     let api_url = format!(
         r#"https://api.github.com/repos/{username}/{repository}"#,
         username = username,
         repository = repository,
     );
+
+    // Prompt the user to enter the privacy setting for the repository.
     let is_private = 'l: loop {
         let input = prompt_user_input("Make it private?: (true/false) ")
             .unwrap_or_else(|_| "false".to_owned());
@@ -106,7 +114,7 @@ fn main() -> Result<()> {
     let options = format!("{{\"private\": {is_private}}}", is_private = is_private);
 
     let cmd = Command::new("curl")
-        .args(["-H", &auth, "-X", "PATCH", &api_url, "-d", &options])
+        .args(["-H", &auth_header, "-X", "PATCH", &api_url, "-d", &options])
         .output() // .spawn()
         .with_context(|| "curl command failed to start")?;
 
@@ -162,24 +170,61 @@ fn prompt_user_input(message: &str) -> Result<String> {
     Ok(input.trim().to_string())
 }
 
-// Open an interactive shell like repl.
-// let cmd = Command::new("sh")
-//     .args(["echo", "hello"])
-//     .output()
-//     // .spawn()
-//     .expect("sh command failed to start");
-// let output = cmd.wait_with_output().unwrap();
-// println!("{}", String::from_utf8_lossy(&output.stdout.to_vec()));
+fn prompt_for_privacy() -> Result<bool> {
+    // Prompt the user to enter the privacy setting for the repository.
+    println!("Should the repository be private? [y/n]");
+    let mut input = String::new();
+    std::io::stdin()
+        .read_line(&mut input)
+        .map_err(|_| "Failed to read input".to_owned())
+        .unwrap();
 
-// Finally, in unit tests, you might want to pass a Cursor, which implements BufRead. In that case, you can use read_password_from_bufread and prompt_password_from_bufread:
-//
-// use std::io::Cursor;
-//
-// let mut mock_input = Cursor::new("my-password\n".as_bytes().to_owned());
-// let password = rpassword::read_password_from_bufread(&mut mock_input).unwrap();
-// println!("Your password is {}", password);
-//
-// let mut mock_input = Cursor::new("my-password\n".as_bytes().to_owned());
-// let mut mock_output = Cursor::new(Vec::new());
-// let password = rpassword::prompt_password_from_bufread(&mut mock_input, &mut mock_output, "Your password: ").unwrap();
-// println!("Your password is {}", password);
+    // Parse the input as a boolean value.
+    match input.trim().to_lowercase().as_ref() {
+        "y" | "yes" => Ok(true),
+        "n" | "no" => Ok(false),
+        _ => Err(anyhow!("Invalid input, please enter y or n".to_owned())),
+    }
+}
+
+pub(crate) mod github {
+    use super::Result;
+    use serde_json::{json, Value};
+    // use reqwest::header::HeaderMap;
+
+    pub(crate) async fn post_request(
+        repository: String,
+        description: String,
+        privacy: String,
+        api_url: String,
+        auth_header: String,
+    ) -> Result<()> {
+        // Construct the request body.
+        let body: Value = json!({
+            "name": repository,
+            "description": description,
+            "private": privacy,
+            "auto_init": true,
+        });
+
+        // Send the API request.
+        let client = reqwest::Client::new();
+        let response = client
+            .post(&api_url)
+            .header("Accept", "application/vnd.github.v3+json")
+            .header("User-Agent", "github-create-repo-rs")
+            .header("Authorization", auth_header)
+            .body(body.to_string()) // Serialize the body to a JSON string
+            .send()
+            .await?;
+
+        // Check if the request was successful.
+        if response.status().is_success() {
+            println!("Repository successfully created!");
+        } else {
+            println!("Failed to create repository: {:?}", response.text().await?);
+        }
+
+        Ok(())
+    }
+}
