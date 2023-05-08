@@ -228,24 +228,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gittidy"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "dialoguer",
- "dotenv",
- "indicatif",
- "pretty_assertions",
- "reqwest",
- "rpassword",
- "serde",
- "serde_json",
- "termion",
- "tokio",
- "url",
-]
-
-[[package]]
 name = "h2"
 version = "0.3.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -622,6 +604,24 @@ dependencies = [
  "diff",
  "output_vt100",
  "yansi",
+]
+
+[[package]]
+name = "privateer"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
+ "dialoguer",
+ "dotenv",
+ "indicatif",
+ "pretty_assertions",
+ "reqwest",
+ "rpassword",
+ "serde",
+ "serde_json",
+ "termion",
+ "tokio",
+ "url",
 ]
 
 [[package]]

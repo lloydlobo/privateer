@@ -106,7 +106,7 @@ async fn main() -> Result<()> {
 
     // If user selects multiple repositories option.
     if should_select_multiple_repos {
-        repositories = github::get_repo_list(&username.clone()).await?;
+        repositories = github::get_repos_request(&username.clone(), &pat_token).await?;
         let repos_ids: Vec<usize> =
             prompt_dialoguer::run_dialoguer(username.clone(), repositories.clone())?;
         if repos_ids.is_empty() {
@@ -136,7 +136,7 @@ async fn main() -> Result<()> {
                 username = username,
                 repo = single_repository
             ),
-            is_private: None,
+            private: None, // FIXME: Can't know for sure if we should set this manually.
         }];
         // dbg!(&repositories);
     }
@@ -290,7 +290,7 @@ pub(crate) mod github {
     use super::{Result, ERROR_ICON, SUCCESS_ICON};
     use anyhow::anyhow;
     use indicatif::{ProgressBar, ProgressStyle};
-    use reqwest::header::HeaderValue;
+    use reqwest::header::{self, HeaderValue};
     use serde::Deserialize;
     use serde_json::{json, Value};
 
@@ -298,19 +298,29 @@ pub(crate) mod github {
     pub(crate) struct Repo {
         pub name: String,
         pub url: String,
-        #[serde(rename = "isPrivate", skip_serializing_if = "Option::is_none")]
-        pub is_private: Option<bool>,
+        // private or isPrivate
+        #[serde(rename = "private", skip_serializing_if = "Option::is_none")]
+        pub private: Option<bool>,
     }
+    ///
+    /// [See docs] https://docs.github.com/en/rest/repos/repos?apiVersion=2022-11-28#list-repositories-for-the-authenticated-user
+    ///
+    /// ```
+    /// $ curl -L \
+    ///  -H "Accept: application/vnd.github+json" \
+    ///  -H "Authorization: Bearer <YOUR-TOKEN>"\
+    ///  -H "X-GitHub-Api-Version: 2022-11-28" \
+    /// https://api.github.com/user/repos
+    /// ```
+    ///
+    /// The `visibility` parameter can have one of the following values: `all | public | private | internal`
+    pub(crate) async fn get_repos_request(username: &str, pat_token: &str) -> Result<Vec<Repo>> {
+        let visibility = String::from("all");
+        let include_forks = false;
 
-    // impl std::fmt::Display for Repo {
-    //     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    //         todo!()
-    //     }
-    // }
-
-    pub(crate) async fn get_repo_list(username: &str) -> Result<Vec<Repo>> {
-        let mut page_number = 1;
         let mut repositories = Vec::new();
+
+        let mut page_number = 1;
 
         // Create a progress bar with a spinner style.
         let progress_bar = ProgressBar::new_spinner();
@@ -320,40 +330,58 @@ pub(crate) mod github {
                 .template("{spinner:.green} {msg}")?,
         );
 
+        let mut params = vec![
+            ("Visibility", visibility.as_str()),
+            ("affiliation", "owner,collaborator"),
+            ("per_page", "100"),
+        ];
+        match include_forks {
+            true => params.push(("type", "all")),
+            false => params.push(("fork", "false")),
+        }
+
         // Loop until all pages have been fetched.
         'l: loop {
             // Show a message indicating that we are fetching the next page of repositories.
-            let msg = format!("Fetching page {}", page_number);
-            progress_bar.set_message(msg);
-
+            progress_bar.set_message(format!("Fetching page {}", page_number));
             if page_number >= 3 {
-                break 'l;
-            } // 300 items. 100 is max limit per page.
+                break 'l; // 300 items. 100 is max limit per page.
+            }
 
-            let url = format!(
-                "https://api.github.com/users/{username}/repos?page={page}&per_page=100",
-                username = username,
-                page = page_number,
-            );
-
-            let client = reqwest::Client::new();
             // Get the next page of repositories from GitHub.
+            let client = reqwest::Client::new();
             let response = match client
-                .get(&url)
-                .header(reqwest::header::USER_AGENT, env!("CARGO_PKG_NAME"))
+                .get(
+                    &(format!(
+                        "https://api.github.com/user/repos?page={page}&per_page=100",
+                        page = page_number,
+                    )),
+                )
+                .header(header::ACCEPT, "application/vnd.github+json")
+                .header(header::USER_AGENT, env!("CARGO_PKG_NAME"))
+                .header(
+                    header::AUTHORIZATION,
+                    HeaderValue::from_str(&format!("Bearer {}", pat_token))?,
+                )
                 .send()
-                .await // if response.content_length().unwrap() == 0 { break; }
+                .await
             {
                 Ok(it) => it,
                 Err(err) => {
-                    let msg = format!("Failed to fetch page {}: {}", page_number, err);
+                    let msg = format!("Failed to fetch page {}: {}\n", page_number, err);
                     progress_bar.finish_with_message(msg);
                     break 'l; // return Err(anyhow!(msg));
                 }
             };
+            if !response.status().is_success() {
+                return Err(anyhow!(
+                    "{ERROR_ICON} Failed to fetch repositories: {err:?}",
+                    err = response.text().await?
+                ));
+            }
 
-            let page_repositories: Vec<Repo> = serde_json::from_str(&response.text().await?)?;
-
+            let text = response.text().await?;
+            let page_repositories: Vec<Repo> = serde_json::from_str(&text)?;
             // If there are no more pages, break the loop.
             if page_repositories.is_empty() {
                 let msg = format!("{SUCCESS_ICON} All repositories fetched!",);
@@ -406,9 +434,9 @@ pub(crate) mod github {
         let client = reqwest::Client::new();
         let response = client
             .post(&api_url) // .patch(&api_url)
-            .header(reqwest::header::ACCEPT, "application/vnd.github.v3+json")
-            .header(reqwest::header::USER_AGENT, env!("CARGO_PKG_NAME"))
-            .header(reqwest::header::AUTHORIZATION, token)
+            .header(header::ACCEPT, "application/vnd.github.v3+json")
+            .header(header::USER_AGENT, env!("CARGO_PKG_NAME"))
+            .header(header::AUTHORIZATION, token)
             .body(body.to_string()) // Serialize the body to a JSON string.
             .send()
             .await?;
