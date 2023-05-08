@@ -149,9 +149,8 @@ async fn main() -> Result<()> {
             repo = repo.name,
         );
 
-        // let styled_repo_link = style_repo_with_link(&username, &repo.url, &repo.name)?;
         let leftpad = 30;
-        let info_repo_url = style_leftpad_repo_url(&repo, Some(leftpad))?;
+        let info_repo_url = style_repo_leftpad_url(&repo, Some(leftpad))?;
 
         // Prompt the user to enter the privacy setting for the repository.
         let privacy = 'l: loop {
@@ -174,31 +173,23 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn style_leftpad_repo_url(repo: &Repo, leftpad: Option<usize>) -> Result<String> {
-    let url = url::Url::parse(&repo.url.clone())?;
+pub(crate) fn style_repo_leftpad_url(repo: &Repo, leftpad: Option<usize>) -> Result<String> {
+    use termion::{color, style};
+    use url::Url;
+
+    let pad = leftpad.unwrap_or(8);
+    let name = format!("{}{}{}", color::Fg(color::Yellow), repo.name, style::Reset);
+    let url = Url::parse(&repo.url.clone())?;
     let url = format!(
         "{}{}{}{}",
-        termion::color::Fg(termion::color::Green),
-        termion::style::Underline,
-        url.as_str(),
-        termion::style::Reset
+        color::Fg(color::Green),
+        style::Underline,
+        url,
+        style::Reset
     );
-    let name = format!(
-        "{}{}{}",
-        termion::color::Fg(termion::color::Yellow),
-        repo.name.as_str(),
-        termion::style::Reset
-    );
+    let result_leftpad = format!("{}{}{}", name, " ".repeat(pad - name.len().min(pad)), url);
 
-    let leftpad = leftpad.unwrap_or(8);
-    let option = format!(
-        "{}{}{}",
-        name,
-        " ".repeat(leftpad - name.len().min(leftpad)), // leftpad.
-        url
-    );
-
-    Ok(option)
+    Ok(result_leftpad)
 }
 // pub(crate) fn style_repo_with_link( username: &str, repo_url: &str, repo_name: &str,) -> Result<String> {
 //     let url = url::Url::parse(repo_url)?;
@@ -210,8 +201,6 @@ mod prompt_dialoguer {
     use super::Result;
     use crate::github::Repo;
     use dialoguer::{theme::ColorfulTheme, MultiSelect};
-    
-    
 
     /// Enables user interaction and returns the result.
     ///
