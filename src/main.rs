@@ -326,7 +326,6 @@ pub(crate) mod github {
             let msg = format!("Fetching page {}", page_number);
             progress_bar.set_message(msg);
 
-            // if response.content_length().unwrap() == 0 { break; }
             if page_number >= 3 {
                 break 'l;
             } // 300 items. 100 is max limit per page.
@@ -336,35 +335,39 @@ pub(crate) mod github {
                 username = username,
                 page = page_number,
             );
+
             let client = reqwest::Client::new();
+            // Get the next page of repositories from GitHub.
             let response = match client
                 .get(&url)
                 .header(reqwest::header::USER_AGENT, env!("CARGO_PKG_NAME"))
                 .send()
-                .await
+                .await // if response.content_length().unwrap() == 0 { break; }
             {
                 Ok(it) => it,
                 Err(err) => {
                     let msg = format!("Failed to fetch page {}: {}", page_number, err);
-                    progress_bar.finish_with_message(msg.clone());
-                    return Err(anyhow!(msg));
+                    progress_bar.finish_with_message(msg);
+                    break 'l; // return Err(anyhow!(msg));
                 }
             };
 
-            // let err = response.error_for_status()?;
-            // Check if the request was successful.
-            // if !err.status().is_success() {
-            //     return Err(anyhow!( "{ERROR_ICON} Failed to get repository list: {err:?}", err = &err.text().await?));
-            // }
+            let page_repositories: Vec<Repo> = serde_json::from_str(&response.text().await?)?;
 
-            let repos: Vec<Repo> = serde_json::from_str(&response.text().await?)?;
-            for repo in repos.into_iter() {
-                repositories.push(repo);
-            } // PERF: instead of looping, mutate repo_list.
+            // If there are no more pages, break the loop.
+            if page_repositories.is_empty() {
+                let msg = format!("{SUCCESS_ICON} All repositories fetched!",);
+                progress_bar.finish_with_message(msg);
+                break 'l;
+            }
 
+            // Add the repositories from the current page to the vector.
+            repositories.extend(page_repositories);
+
+            // Update the progress bar to indicate that we are fetching the next page.
             progress_bar.inc(1);
             page_number += 1;
-        }
+        } // Once all repositories have been fetched, the progress bar is finished.
 
         println!(
             "{SUCCESS_ICON} Fetched details of `{count}` repos successfully!",
