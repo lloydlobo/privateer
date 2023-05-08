@@ -200,6 +200,7 @@ pub(crate) fn style_repo_leftpad_url(repo: &Repo, leftpad: Option<usize>) -> Res
 mod prompt_dialoguer {
     use super::Result;
     use crate::github::Repo;
+    use console::style;
     use dialoguer::{theme::ColorfulTheme, MultiSelect};
 
     /// Enables user interaction and returns the result.
@@ -211,16 +212,25 @@ mod prompt_dialoguer {
     /// In this implementation, we use the `Url` crate to construct the URLs, `termion` to style the
     /// URLs with underline, and `fmt::Write` to format the items with the repository name and
     /// clickable URL.
+    ///
+    // let mut url = Url::parse("https://github.com")?;
+    // url.path_segments_mut().unwrap().push(&username).push(&repo.name);
+    // let url = format!("{}{}{}", style::Underline, url.as_str(), style::Reset);
+    // let leftpad = 30;
+    // let option = style_leftpad_repo_url(repo, Some(leftpad), url);
     pub(crate) fn run_dialoguer(_username: String, repos: Vec<Repo>) -> Result<Vec<usize>> {
+        let parse_visibility = |is_private: bool| match is_private {
+            true => style("public".to_string()).dim(),
+            false => style("private".to_string()).yellow(),
+        };
+
         let mut options: Vec<String> = Vec::new();
         for repo in &repos {
-            // let mut url = Url::parse("https://github.com")?;
-            // url.path_segments_mut().unwrap().push(&username).push(&repo.name);
-            // let url = format!("{}{}{}", style::Underline, url.as_str(), style::Reset);
-            // let leftpad = 30;
-            // let option = style_leftpad_repo_url(repo, Some(leftpad), url);
-            // options.push(option);
-            options.push(repo.name.clone());
+            options.push(format!(
+                "{name} {visibility}",
+                name = repo.name,
+                visibility = parse_visibility(repo.private.unwrap())
+            ));
         }
 
         let selections = MultiSelect::with_theme(&ColorfulTheme::default())
@@ -314,7 +324,7 @@ pub(crate) mod github {
     /// ```
     ///
     /// The `visibility` parameter can have one of the following values: `all | public | private | internal`
-    pub(crate) async fn get_repos_request(username: &str, pat_token: &str) -> Result<Vec<Repo>> {
+    pub(crate) async fn get_repos_request(_username: &str, pat_token: &str) -> Result<Vec<Repo>> {
         let visibility = String::from("all");
         let include_forks = false;
 
