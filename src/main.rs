@@ -210,8 +210,8 @@ mod prompt_dialoguer {
     use super::Result;
     use crate::github::Repo;
     use dialoguer::{theme::ColorfulTheme, MultiSelect};
-    use termion::{color, style};
-    use url::Url;
+    
+    
 
     /// Enables user interaction and returns the result.
     ///
@@ -222,7 +222,7 @@ mod prompt_dialoguer {
     /// In this implementation, we use the `Url` crate to construct the URLs, `termion` to style the
     /// URLs with underline, and `fmt::Write` to format the items with the repository name and
     /// clickable URL.
-    pub(crate) fn run_dialoguer(username: String, repos: Vec<Repo>) -> Result<Vec<usize>> {
+    pub(crate) fn run_dialoguer(_username: String, repos: Vec<Repo>) -> Result<Vec<usize>> {
         let mut options: Vec<String> = Vec::new();
         for repo in &repos {
             // let mut url = Url::parse("https://github.com")?;
