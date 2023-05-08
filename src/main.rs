@@ -94,7 +94,7 @@ async fn main() -> Result<()> {
     // Prompt the user to select option for multiple repositories actions.
     let should_select_multiple_repos: bool = loop {
         let input =
-            prompter::prompt_user_input("Do you want to modify multiple repositories?: (y/N)")
+            prompter::prompt_user_input("Do you want to modify multiple repositories?: (y/N) ")
                 .unwrap_or_else(|_| "n".to_owned())
                 .to_lowercase();
         if input == "y" || input == "n" {
@@ -106,13 +106,24 @@ async fn main() -> Result<()> {
 
     // If user selects multiple repositories option.
     if should_select_multiple_repos {
-        repositories = github::get_repo_list(&username).await?;
-        let repos_ids: Vec<usize> = prompt_dialoguer::run_dialoguer(repositories.clone())?;
+        repositories = github::get_repo_list(&username.clone()).await?;
+        let repos_ids: Vec<usize> =
+            prompt_dialoguer::run_dialoguer(username.clone(), repositories.clone())?;
+        if repos_ids.is_empty() {
+            return Err(anyhow!(
+                "{ERROR_ICON} No repositories were selected. Hint! Use <space> to select, then <Enter> to confirm.\nExiting",
+            ));
+        }
         repositories = repos_ids
             .into_iter()
-            .map(|id| repositories[id].clone())
+            .map(|id| {
+                let mut rep = repositories[id].clone();
+                if rep.url.starts_with("https://api.github.com/repos") {
+                    rep.url = rep.url.split("api.").collect::<Vec<_>>().join("");
+                }
+                rep
+            })
             .collect();
-        dbg!(&repositories);
     } else {
         let single_repository = prompter::prompt_user_input("Enter repository: ")?;
         if single_repository.is_empty() {
@@ -121,55 +132,113 @@ async fn main() -> Result<()> {
         repositories = vec![Repo {
             name: single_repository.clone(),
             url: format!(
-                "https://github.com/${username}/${repo}",
+                "https://github.com/{username}/{repo}",
                 username = username,
                 repo = single_repository
             ),
             is_private: None,
         }];
-        dbg!(&repositories);
+        // dbg!(&repositories);
     }
 
-    // If user selects single repository option.
-    let single_repository = prompter::prompt_user_input("Enter repository: ")?;
-    if single_repository.is_empty() {
-        return Err(anyhow!("{ERROR_ICON} `repository` is required",));
-    }
+    for repo in repositories {
+        // Construct the Authorization header and API URL.
+        let api_url = format!(
+            r#"https://api.github.com/repos/{username}/{repo}"#,
+            username = username,
+            repo = repo.name,
+        );
 
-    // Construct the Authorization header and API URL.
-    let api_url = format!(
-        r#"https://api.github.com/repos/{username}/{repository}"#,
-        username = username,
-        repository = single_repository,
-    );
+        // let styled_repo_link = style_repo_with_link(&username, &repo.url, &repo.name)?;
+        let leftpad = 30;
+        let info_repo_url = style_leftpad_repo_url(&repo, Some(leftpad))?;
 
-    // Prompt the user to enter the privacy setting for the repository.
-    let privacy = 'l: loop {
-        let input = prompter::prompt_user_input("Make it private?: (true/false) ")
+        // Prompt the user to enter the privacy setting for the repository.
+        let privacy = 'l: loop {
+            println!("{}", info_repo_url); // use std::io::Write; write!( std::io::stdout(), "{}{}{}{}", termion::style::Underline, option, termion::style::NoUnderline, termion::cursor::Goto(1, 2)) .unwrap(); std::io::stdout().flush()?;
+            let input = prompter::prompt_user_input(&format!(
+                "  >> Make this repo private?: (true/false) ",
+            ))
             .unwrap_or_else(|_| "false".to_owned());
-        match input == "true" || input == "false" {
-            true => break 'l input,
-            false => println!("{ERROR_ICON} Please enter either `true` or `false`"),
-        }
-    };
+            match input == "true" || input == "false" {
+                true => break 'l input,
+                false => println!("{ERROR_ICON} Please enter either `true` or `false`"),
+            }
+        };
 
-    github::post_request(single_repository, privacy, api_url, pat_token).await?;
+        // FIXME: If repository is a public fork, and when attempted to make private,
+        // this will panic and crash the program.
+        github::post_request(repo.name, privacy, api_url, pat_token.clone()).await?;
+    }
 
     Ok(())
 }
 
-mod prompt_dialoguer {
-    use dialoguer::{theme::ColorfulTheme, MultiSelect};
+pub(crate) fn style_leftpad_repo_url(repo: &Repo, leftpad: Option<usize>) -> Result<String> {
+    let url = url::Url::parse(&repo.url.clone())?;
+    let url = format!(
+        "{}{}{}{}",
+        termion::color::Fg(termion::color::Green),
+        termion::style::Underline,
+        url.as_str(),
+        termion::style::Reset
+    );
+    let name = format!(
+        "{}{}{}",
+        termion::color::Fg(termion::color::Yellow),
+        repo.name.as_str(),
+        termion::style::Reset
+    );
 
+    let leftpad = leftpad.unwrap_or(8);
+    let option = format!(
+        "{}{}{}",
+        name,
+        " ".repeat(leftpad - name.len().min(leftpad)), // leftpad.
+        url
+    );
+
+    Ok(option)
+}
+// pub(crate) fn style_repo_with_link( username: &str, repo_url: &str, repo_name: &str,) -> Result<String> {
+//     let url = url::Url::parse(repo_url)?;
+//     let url = format!( "{}{}{}", termion::style::Underline, url.as_str(), termion::style::Reset);
+//     Ok(url)
+// }
+
+mod prompt_dialoguer {
     use super::Result;
     use crate::github::Repo;
+    use dialoguer::{theme::ColorfulTheme, MultiSelect};
+    use termion::{color, style};
+    use url::Url;
 
-    pub(crate) fn run_dialoguer(repos: Vec<Repo>) -> Result<Vec<usize>> {
-        dbg!(&repos.len());
+    /// Enables user interaction and returns the result.
+    ///
+    /// The user can select the items with the 'Space' bar and on 'Enter' the indices of selected items will be returned.
+    /// The dialog is rendered on stderr.
+    /// Result contains `Vec<index>` if user hit 'Enter'.
+    ///
+    /// In this implementation, we use the `Url` crate to construct the URLs, `termion` to style the
+    /// URLs with underline, and `fmt::Write` to format the items with the repository name and
+    /// clickable URL.
+    pub(crate) fn run_dialoguer(username: String, repos: Vec<Repo>) -> Result<Vec<usize>> {
+        let mut options: Vec<String> = Vec::new();
+        for repo in &repos {
+            // let mut url = Url::parse("https://github.com")?;
+            // url.path_segments_mut().unwrap().push(&username).push(&repo.name);
+            // let url = format!("{}{}{}", style::Underline, url.as_str(), style::Reset);
+            // let leftpad = 30;
+            // let option = style_leftpad_repo_url(repo, Some(leftpad), url);
+            // options.push(option);
+            options.push(repo.name.clone());
+        }
+
         let selections = MultiSelect::with_theme(&ColorfulTheme::default())
             .with_prompt("Please select an option: (space to select, enter to confirm)")
-            .items(&repos.into_iter().map(|x| x.name).collect::<Vec<_>>())
+            .items(&options)
             .interact()?;
+
         Ok(selections)
     }
 }
