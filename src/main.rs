@@ -154,7 +154,7 @@ async fn main() -> Result<()> {
 
         // Prompt the user to enter the privacy setting for the repository.
         let privacy = 'l: loop {
-            println!("{}", info_repo_url); // use std::io::Write; write!( std::io::stdout(), "{}{}{}{}", termion::style::Underline, option, termion::style::NoUnderline, termion::cursor::Goto(1, 2)) .unwrap(); std::io::stdout().flush()?;
+            println!("{}", info_repo_url);
             let input = prompter::prompt_user_input(&format!(
                 "  >> Make this repo private?: (true/false) ",
             ))
@@ -174,28 +174,21 @@ async fn main() -> Result<()> {
 }
 
 pub(crate) fn style_repo_leftpad_url(repo: &Repo, leftpad: Option<usize>) -> Result<String> {
-    use termion::{color, style};
-    use url::Url;
+    use console::{measure_text_width, style};
 
     let pad = leftpad.unwrap_or(8);
-    let name = format!("{}{}{}", color::Fg(color::Yellow), repo.name, style::Reset);
-    let url = Url::parse(&repo.url.clone())?;
-    let url = format!(
-        "{}{}{}{}",
-        color::Fg(color::Green),
-        style::Underline,
-        url,
-        style::Reset
+    let name = style(&repo.name).yellow();
+    let url = style(&repo.url).green().underlined();
+    let name_width = measure_text_width(&repo.name);
+    let result_leftpad = format!(
+        "{name}{padding}{url}",
+        name = name,
+        padding = " ".repeat(pad.saturating_sub(name_width)),
+        url = url
     );
-    let result_leftpad = format!("{}{}{}", name, " ".repeat(pad - name.len().min(pad)), url);
 
     Ok(result_leftpad)
 }
-// pub(crate) fn style_repo_with_link( username: &str, repo_url: &str, repo_name: &str,) -> Result<String> {
-//     let url = url::Url::parse(repo_url)?;
-//     let url = format!( "{}{}{}", termion::style::Underline, url.as_str(), termion::style::Reset);
-//     Ok(url)
-// }
 
 mod prompt_dialoguer {
     use super::Result;
@@ -209,19 +202,13 @@ mod prompt_dialoguer {
     /// The dialog is rendered on stderr.
     /// Result contains `Vec<index>` if user hit 'Enter'.
     ///
-    /// In this implementation, we use the `Url` crate to construct the URLs, `termion` to style the
+    /// In this implementation, we use the `Url` crate to construct the URLs, `console` to style the
     /// URLs with underline, and `fmt::Write` to format the items with the repository name and
     /// clickable URL.
-    ///
-    // let mut url = Url::parse("https://github.com")?;
-    // url.path_segments_mut().unwrap().push(&username).push(&repo.name);
-    // let url = format!("{}{}{}", style::Underline, url.as_str(), style::Reset);
-    // let leftpad = 30;
-    // let option = style_leftpad_repo_url(repo, Some(leftpad), url);
     pub(crate) fn run_dialoguer(_username: String, repos: Vec<Repo>) -> Result<Vec<usize>> {
         let parse_visibility = |is_private: bool| match is_private {
-            true => style("public".to_string()).dim(),
-            false => style("private".to_string()).yellow(),
+            false => style("public".to_string()).dim(),
+            true => style("private".to_string()).yellow(),
         };
 
         let mut options: Vec<String> = Vec::new();
