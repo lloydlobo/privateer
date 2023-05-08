@@ -289,6 +289,7 @@ pub(crate) mod github {
 
     use super::{Result, ERROR_ICON, SUCCESS_ICON};
     use anyhow::anyhow;
+    use indicatif::{ProgressBar, ProgressStyle};
     use reqwest::header::HeaderValue;
     use serde::Deserialize;
     use serde_json::{json, Value};
@@ -309,9 +310,23 @@ pub(crate) mod github {
 
     pub(crate) async fn get_repo_list(username: &str) -> Result<Vec<Repo>> {
         let mut page_number = 1;
+        let mut repositories = Vec::new();
 
-        let mut repo_list = Vec::new();
+        // Create a progress bar with a spinner style.
+        let progress_bar = ProgressBar::new_spinner();
+        progress_bar.set_style(
+            ProgressStyle::default_spinner()
+                .tick_chars("/|\\- ")
+                .template("{spinner:.green} {msg}")?,
+        );
+
+        // Loop until all pages have been fetched.
         'l: loop {
+            // Show a message indicating that we are fetching the next page of repositories.
+            let msg = format!("Fetching page {}", page_number);
+            progress_bar.set_message(msg);
+
+            // if response.content_length().unwrap() == 0 { break; }
             if page_number >= 3 {
                 break 'l;
             } // 300 items. 100 is max limit per page.
@@ -322,11 +337,19 @@ pub(crate) mod github {
                 page = page_number,
             );
             let client = reqwest::Client::new();
-            let response = client
+            let response = match client
                 .get(&url)
                 .header(reqwest::header::USER_AGENT, env!("CARGO_PKG_NAME"))
                 .send()
-                .await?; // if response.content_length().unwrap() == 0 { break; }
+                .await
+            {
+                Ok(it) => it,
+                Err(err) => {
+                    let msg = format!("Failed to fetch page {}: {}", page_number, err);
+                    progress_bar.finish_with_message(msg.clone());
+                    return Err(anyhow!(msg));
+                }
+            };
 
             // let err = response.error_for_status()?;
             // Check if the request was successful.
@@ -336,18 +359,19 @@ pub(crate) mod github {
 
             let repos: Vec<Repo> = serde_json::from_str(&response.text().await?)?;
             for repo in repos.into_iter() {
-                repo_list.push(repo);
+                repositories.push(repo);
             } // PERF: instead of looping, mutate repo_list.
 
+            progress_bar.inc(1);
             page_number += 1;
         }
 
         println!(
             "{SUCCESS_ICON} Fetched details of `{count}` repos successfully!",
-            count = repo_list.len()
+            count = repositories.len()
         );
 
-        Ok(repo_list)
+        Ok(repositories)
     }
 
     /// Command to make the repository private:
