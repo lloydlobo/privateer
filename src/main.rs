@@ -88,28 +88,46 @@ async fn main() -> Result<()> {
         ));
     }
 
-    let mut multiple_repository = Vec::new();
+    // let mut multiple_repository = Vec::new();
+    let mut repositories: Vec<Repo>;
 
-    // Prompt the user to enter the privacy setting for the repository.
-    let should_select_multiple_repos = 'l: loop {
+    // Prompt the user to select option for multiple repositories actions.
+    let should_select_multiple_repos: bool = loop {
         let input =
-            prompter::prompt_user_input("Do you want to select multiple repositories?: (y/N)")
+            prompter::prompt_user_input("Do you want to modify multiple repositories?: (y/N)")
                 .unwrap_or_else(|_| "n".to_owned())
                 .to_lowercase();
-        match input == "y" || input == "n" {
-            true => break input,
-            false => println!("{ERROR_ICON} Please enter either `true` or `false`"),
+        if input == "y" || input == "n" {
+            break input == "y";
+        } else {
+            println!("{ERROR_ICON} Please enter either `y` or `n` or `Ctrl/Cmd-C to quit`")
         }
     };
 
     // If user selects multiple repositories option.
-    if should_select_multiple_repos == "y" {
-        let repos: Vec<Repo> = github::get_repo_list(&username).await?;
-        let repos_ids = prompt_dialoguer::run_dialoguer(repos.clone())?;
-        for id in repos_ids {
-            multiple_repository.push(repos[id].clone());
+    if should_select_multiple_repos {
+        repositories = github::get_repo_list(&username).await?;
+        let repos_ids: Vec<usize> = prompt_dialoguer::run_dialoguer(repositories.clone())?;
+        repositories = repos_ids
+            .into_iter()
+            .map(|id| repositories[id].clone())
+            .collect();
+        dbg!(&repositories);
+    } else {
+        let single_repository = prompter::prompt_user_input("Enter repository: ")?;
+        if single_repository.is_empty() {
+            return Err(anyhow!("{ERROR_ICON} `repository` is required",));
         }
-        println!("{multiple_repository:?}");
+        repositories = vec![Repo {
+            name: single_repository.clone(),
+            url: format!(
+                "https://github.com/${username}/${repo}",
+                username = username,
+                repo = single_repository
+            ),
+            is_private: None,
+        }];
+        dbg!(&repositories);
     }
 
     // If user selects single repository option.
