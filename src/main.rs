@@ -15,7 +15,13 @@
 //!    - If you want to make multiple repositories private or public, you can create a script that loops through a list of repositories and makes the necessary changes using the Git API or the web interface provided by your Git hosting provider.
 //!    - Alternatively, you can use a third-party tool like the GitHub CLI (`gh`) to manage your repositories from the command line. `gh` provides an easy-to-use interface for managing repositories, including creating, cloning, and modifying them.
 
+#![deny(missing_docs)]
+
+#[cfg(test)]
+mod tests;
+
 use anyhow::anyhow;
+use github::Repo;
 use serde::Deserialize;
 
 pub(crate) type Result<T> = anyhow::Result<T, anyhow::Error>;
@@ -69,8 +75,6 @@ async fn main() -> Result<()> {
         return Err(anyhow!("{ERROR_ICON} `username` is required",));
     }
 
-    github::get_repo_list(&username).await?;
-
     // Get personal access token.
     let pat_token = std::env::var("PAT_TOKEN")
         .map(|token| match token.is_empty() {
@@ -84,16 +88,41 @@ async fn main() -> Result<()> {
         ));
     }
 
-    let repository = prompter::prompt_user_input("Enter repository: ")?;
-    if repository.is_empty() {
-        return Err(anyhow!("{ERROR_ICON} `password` is required",));
+    let mut multiple_repository = Vec::new();
+
+    // Prompt the user to enter the privacy setting for the repository.
+    let should_select_multiple_repos = 'l: loop {
+        let input =
+            prompter::prompt_user_input("Do you want to select multiple repositories?: (y/N)")
+                .unwrap_or_else(|_| "n".to_owned())
+                .to_lowercase();
+        match input == "y" || input == "n" {
+            true => break input,
+            false => println!("{ERROR_ICON} Please enter either `true` or `false`"),
+        }
+    };
+
+    // If user selects multiple repositories option.
+    if should_select_multiple_repos == "y" {
+        let repos: Vec<Repo> = github::get_repo_list(&username).await?;
+        let repos_ids = prompt_dialoguer::run_dialoguer(repos.clone())?;
+        for id in repos_ids {
+            multiple_repository.push(repos[id].clone());
+        }
+        println!("{multiple_repository:?}");
+    }
+
+    // If user selects single repository option.
+    let single_repository = prompter::prompt_user_input("Enter repository: ")?;
+    if single_repository.is_empty() {
+        return Err(anyhow!("{ERROR_ICON} `repository` is required",));
     }
 
     // Construct the Authorization header and API URL.
     let api_url = format!(
         r#"https://api.github.com/repos/{username}/{repository}"#,
         username = username,
-        repository = repository,
+        repository = single_repository,
     );
 
     // Prompt the user to enter the privacy setting for the repository.
@@ -106,9 +135,25 @@ async fn main() -> Result<()> {
         }
     };
 
-    github::post_request(repository, privacy, api_url, pat_token).await?;
+    github::post_request(single_repository, privacy, api_url, pat_token).await?;
 
     Ok(())
+}
+
+mod prompt_dialoguer {
+    use dialoguer::{theme::ColorfulTheme, MultiSelect};
+
+    use super::Result;
+    use crate::github::Repo;
+
+    pub(crate) fn run_dialoguer(repos: Vec<Repo>) -> Result<Vec<usize>> {
+        dbg!(&repos.len());
+        let selections = MultiSelect::with_theme(&ColorfulTheme::default())
+            .with_prompt("Please select an option: (space to select, enter to confirm)")
+            .items(&repos.into_iter().map(|x| x.name).collect::<Vec<_>>())
+            .interact()?;
+        Ok(selections)
+    }
 }
 
 mod prompter {
@@ -165,7 +210,6 @@ mod prompter {
 }
 
 pub(crate) mod github {
-    use std::sync::Arc;
 
     use super::{Result, ERROR_ICON, SUCCESS_ICON};
     use anyhow::anyhow;
@@ -173,22 +217,28 @@ pub(crate) mod github {
     use serde::Deserialize;
     use serde_json::{json, Value};
 
-    #[derive(Debug, Deserialize)]
+    #[derive(Debug, Deserialize, Clone)]
     pub(crate) struct Repo {
-        name: String,
-        url: String,
+        pub name: String,
+        pub url: String,
         #[serde(rename = "isPrivate", skip_serializing_if = "Option::is_none")]
-        is_private: Option<bool>,
+        pub is_private: Option<bool>,
     }
 
-    pub(crate) async fn get_repo_list(username: &str) -> Result<Vec<String>> {
+    // impl std::fmt::Display for Repo {
+    //     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    //         todo!()
+    //     }
+    // }
+
+    pub(crate) async fn get_repo_list(username: &str) -> Result<Vec<Repo>> {
         let mut page_number = 1;
 
         let mut repo_list = Vec::new();
         'l: loop {
-            if page_number >= 4 {
+            if page_number >= 3 {
                 break 'l;
-            } // 400 items. 100 is max limit per page.
+            } // 300 items. 100 is max limit per page.
 
             let url = format!(
                 "https://api.github.com/users/{username}/repos?page={page}&per_page=100",
@@ -209,10 +259,10 @@ pub(crate) mod github {
             // }
 
             let repos: Vec<Repo> = serde_json::from_str(&response.text().await?)?;
+            for repo in repos.into_iter() {
+                repo_list.push(repo);
+            } // PERF: instead of looping, mutate repo_list.
 
-            for repo in repos {
-                repo_list.push(repo.name);
-            }
             page_number += 1;
         }
 
@@ -222,7 +272,6 @@ pub(crate) mod github {
         );
 
         Ok(repo_list)
-        // Ok(vec![String::new()])
     }
 
     /// Command to make the repository private:
