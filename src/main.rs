@@ -15,7 +15,13 @@
 //!    - If you want to make multiple repositories private or public, you can create a script that loops through a list of repositories and makes the necessary changes using the Git API or the web interface provided by your Git hosting provider.
 //!    - Alternatively, you can use a third-party tool like the GitHub CLI (`gh`) to manage your repositories from the command line. `gh` provides an easy-to-use interface for managing repositories, including creating, cloning, and modifying them.
 
+#![deny(missing_docs)]
+
+#[cfg(test)]
+mod tests;
+
 use anyhow::anyhow;
+use github::Repo;
 use serde::Deserialize;
 
 pub(crate) type Result<T> = anyhow::Result<T, anyhow::Error>;
@@ -68,10 +74,6 @@ async fn main() -> Result<()> {
     if username.is_empty() {
         return Err(anyhow!("{ERROR_ICON} `username` is required",));
     }
-    let repository = prompter::prompt_user_input("Enter repository: ")?;
-    if repository.is_empty() {
-        return Err(anyhow!("{ERROR_ICON} `password` is required",));
-    }
 
     // Get personal access token.
     let pat_token = std::env::var("PAT_TOKEN")
@@ -86,26 +88,148 @@ async fn main() -> Result<()> {
         ));
     }
 
-    // Construct the Authorization header and API URL.
-    let api_url = format!(
-        r#"https://api.github.com/repos/{username}/{repository}"#,
-        username = username,
-        repository = repository,
-    );
+    // let mut multiple_repository = Vec::new();
+    let mut repositories: Vec<Repo>;
 
-    // Prompt the user to enter the privacy setting for the repository.
-    let privacy = 'l: loop {
-        let input = prompter::prompt_user_input("Make it private?: (true/false) ")
-            .unwrap_or_else(|_| "false".to_owned());
-        match input == "true" || input == "false" {
-            true => break 'l input,
-            false => println!("{ERROR_ICON} Please enter either `true` or `false`"),
+    // Prompt the user to select option for multiple repositories actions.
+    let should_select_multiple_repos: bool = loop {
+        let input =
+            prompter::prompt_user_input("Do you want to modify multiple repositories?: (y/N) ")
+                .unwrap_or_else(|_| "n".to_owned())
+                .to_lowercase();
+        if input == "y" || input == "n" {
+            break input == "y";
+        } else {
+            println!("{ERROR_ICON} Please enter either `y` or `n` or `Ctrl/Cmd-C to quit`")
         }
     };
 
-    github::post_request(repository, privacy, api_url, pat_token).await?;
+    // If user selects multiple repositories option.
+    if should_select_multiple_repos {
+        repositories = github::get_repo_list(&username.clone()).await?;
+        let repos_ids: Vec<usize> =
+            prompt_dialoguer::run_dialoguer(username.clone(), repositories.clone())?;
+        if repos_ids.is_empty() {
+            return Err(anyhow!(
+                "{ERROR_ICON} No repositories were selected. Hint! Use <space> to select, then <Enter> to confirm.\nExiting",
+            ));
+        }
+        repositories = repos_ids
+            .into_iter()
+            .map(|id| {
+                let mut rep = repositories[id].clone();
+                if rep.url.starts_with("https://api.github.com/repos") {
+                    rep.url = rep.url.split("api.").collect::<Vec<_>>().join("");
+                }
+                rep
+            })
+            .collect();
+    } else {
+        let single_repository = prompter::prompt_user_input("Enter repository: ")?;
+        if single_repository.is_empty() {
+            return Err(anyhow!("{ERROR_ICON} `repository` is required",));
+        }
+        repositories = vec![Repo {
+            name: single_repository.clone(),
+            url: format!(
+                "https://github.com/{username}/{repo}",
+                username = username,
+                repo = single_repository
+            ),
+            is_private: None,
+        }];
+        // dbg!(&repositories);
+    }
+
+    for repo in repositories {
+        // Construct the Authorization header and API URL.
+        let api_url = format!(
+            r#"https://api.github.com/repos/{username}/{repo}"#,
+            username = username,
+            repo = repo.name,
+        );
+
+        let leftpad = 30;
+        let info_repo_url = style_repo_leftpad_url(&repo, Some(leftpad))?;
+
+        // Prompt the user to enter the privacy setting for the repository.
+        let privacy = 'l: loop {
+            println!("{}", info_repo_url); // use std::io::Write; write!( std::io::stdout(), "{}{}{}{}", termion::style::Underline, option, termion::style::NoUnderline, termion::cursor::Goto(1, 2)) .unwrap(); std::io::stdout().flush()?;
+            let input = prompter::prompt_user_input(&format!(
+                "  >> Make this repo private?: (true/false) ",
+            ))
+            .unwrap_or_else(|_| "false".to_owned());
+            match input == "true" || input == "false" {
+                true => break 'l input,
+                false => println!("{ERROR_ICON} Please enter either `true` or `false`"),
+            }
+        };
+
+        // FIXME: If repository is a public fork, and when attempted to make private,
+        // this will panic and crash the program.
+        github::post_request(repo.name, privacy, api_url, pat_token.clone()).await?;
+    }
 
     Ok(())
+}
+
+pub(crate) fn style_repo_leftpad_url(repo: &Repo, leftpad: Option<usize>) -> Result<String> {
+    use termion::{color, style};
+    use url::Url;
+
+    let pad = leftpad.unwrap_or(8);
+    let name = format!("{}{}{}", color::Fg(color::Yellow), repo.name, style::Reset);
+    let url = Url::parse(&repo.url.clone())?;
+    let url = format!(
+        "{}{}{}{}",
+        color::Fg(color::Green),
+        style::Underline,
+        url,
+        style::Reset
+    );
+    let result_leftpad = format!("{}{}{}", name, " ".repeat(pad - name.len().min(pad)), url);
+
+    Ok(result_leftpad)
+}
+// pub(crate) fn style_repo_with_link( username: &str, repo_url: &str, repo_name: &str,) -> Result<String> {
+//     let url = url::Url::parse(repo_url)?;
+//     let url = format!( "{}{}{}", termion::style::Underline, url.as_str(), termion::style::Reset);
+//     Ok(url)
+// }
+
+mod prompt_dialoguer {
+    use super::Result;
+    use crate::github::Repo;
+    use dialoguer::{theme::ColorfulTheme, MultiSelect};
+
+    /// Enables user interaction and returns the result.
+    ///
+    /// The user can select the items with the 'Space' bar and on 'Enter' the indices of selected items will be returned.
+    /// The dialog is rendered on stderr.
+    /// Result contains `Vec<index>` if user hit 'Enter'.
+    ///
+    /// In this implementation, we use the `Url` crate to construct the URLs, `termion` to style the
+    /// URLs with underline, and `fmt::Write` to format the items with the repository name and
+    /// clickable URL.
+    pub(crate) fn run_dialoguer(_username: String, repos: Vec<Repo>) -> Result<Vec<usize>> {
+        let mut options: Vec<String> = Vec::new();
+        for repo in &repos {
+            // let mut url = Url::parse("https://github.com")?;
+            // url.path_segments_mut().unwrap().push(&username).push(&repo.name);
+            // let url = format!("{}{}{}", style::Underline, url.as_str(), style::Reset);
+            // let leftpad = 30;
+            // let option = style_leftpad_repo_url(repo, Some(leftpad), url);
+            // options.push(option);
+            options.push(repo.name.clone());
+        }
+
+        let selections = MultiSelect::with_theme(&ColorfulTheme::default())
+            .with_prompt("Please select an option: (space to select, enter to confirm)")
+            .items(&options)
+            .interact()?;
+
+        Ok(selections)
+    }
 }
 
 mod prompter {
@@ -162,10 +286,96 @@ mod prompter {
 }
 
 pub(crate) mod github {
+
     use super::{Result, ERROR_ICON, SUCCESS_ICON};
     use anyhow::anyhow;
+    use indicatif::{ProgressBar, ProgressStyle};
     use reqwest::header::HeaderValue;
+    use serde::Deserialize;
     use serde_json::{json, Value};
+
+    #[derive(Debug, Deserialize, Clone)]
+    pub(crate) struct Repo {
+        pub name: String,
+        pub url: String,
+        #[serde(rename = "isPrivate", skip_serializing_if = "Option::is_none")]
+        pub is_private: Option<bool>,
+    }
+
+    // impl std::fmt::Display for Repo {
+    //     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    //         todo!()
+    //     }
+    // }
+
+    pub(crate) async fn get_repo_list(username: &str) -> Result<Vec<Repo>> {
+        let mut page_number = 1;
+        let mut repositories = Vec::new();
+
+        // Create a progress bar with a spinner style.
+        let progress_bar = ProgressBar::new_spinner();
+        progress_bar.set_style(
+            ProgressStyle::default_spinner()
+                .tick_chars("/|\\- ")
+                .template("{spinner:.green} {msg}")?,
+        );
+
+        // Loop until all pages have been fetched.
+        'l: loop {
+            // Show a message indicating that we are fetching the next page of repositories.
+            let msg = format!("Fetching page {}", page_number);
+            progress_bar.set_message(msg);
+
+            if page_number >= 3 {
+                break 'l;
+            } // 300 items. 100 is max limit per page.
+
+            let url = format!(
+                "https://api.github.com/users/{username}/repos?page={page}&per_page=100",
+                username = username,
+                page = page_number,
+            );
+
+            let client = reqwest::Client::new();
+            // Get the next page of repositories from GitHub.
+            let response = match client
+                .get(&url)
+                .header(reqwest::header::USER_AGENT, env!("CARGO_PKG_NAME"))
+                .send()
+                .await // if response.content_length().unwrap() == 0 { break; }
+            {
+                Ok(it) => it,
+                Err(err) => {
+                    let msg = format!("Failed to fetch page {}: {}", page_number, err);
+                    progress_bar.finish_with_message(msg);
+                    break 'l; // return Err(anyhow!(msg));
+                }
+            };
+
+            let page_repositories: Vec<Repo> = serde_json::from_str(&response.text().await?)?;
+
+            // If there are no more pages, break the loop.
+            if page_repositories.is_empty() {
+                let msg = format!("{SUCCESS_ICON} All repositories fetched!",);
+                progress_bar.finish_with_message(msg);
+                break 'l;
+            }
+
+            // Add the repositories from the current page to the vector.
+            repositories.extend(page_repositories);
+
+            // Update the progress bar to indicate that we are fetching the next page.
+            progress_bar.inc(1);
+            page_number += 1;
+        } // Once all repositories have been fetched, the progress bar is finished.
+
+        println!(
+            "{SUCCESS_ICON} Fetched details of `{count}` repos successfully!",
+            count = repositories.len()
+        );
+
+        Ok(repositories)
+    }
 
     /// Command to make the repository private:
     ///
