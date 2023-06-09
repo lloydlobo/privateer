@@ -1,4 +1,4 @@
-# gittidy
+# privateer
 
 **CLI Application for making a GitHub repository private**
 
